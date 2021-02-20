@@ -1,0 +1,18 @@
+[package]
+name = "create-social-card"
+version = "0.1.0"
+authors = ["Daniel Imfeld <daniel@imfeld.dev>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.38"
+glyph_brush_layout = "0.2.1"
+image = "0.23.13"
+pix = "0.13.1"
+serde = "1.0.123"
+serde_derive = "1.0.123"
+structopt = "0.3.21"
+thiserror = "1.0.24"
+toml = "0.5.8"
