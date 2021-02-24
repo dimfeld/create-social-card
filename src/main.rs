@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use structopt::StructOpt;
 
 mod lib;
-use lib::{overlay_text, OverlayOptions, Rect};
+use lib::{overlay_text, OverlayOptions, Rect, Shadow};
 
 #[derive(Debug, StructOpt)]
 struct Args {
@@ -27,6 +27,7 @@ struct Config {
     max_size: Option<f32>,
     min_size: Option<f32>,
     color: String,
+    shadow: Option<Shadow>,
 }
 
 fn main() -> Result<()> {
@@ -54,6 +55,7 @@ fn main() -> Result<()> {
         min_size,
         max_size,
         color: &config.color,
+        shadow: config.shadow.as_ref(),
     };
 
     let result = overlay_text(&options)?;
