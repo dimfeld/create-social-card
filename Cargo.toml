@@ -1,8 +1,10 @@
 [package]
 name = "create-social-card"
+description = "Overlay text onto a background image"
 version = "0.1.0"
 authors = ["Daniel Imfeld <daniel@imfeld.dev>"]
 edition = "2018"
+repository = "https://github.com/dimfeld/create-social-card"
 
 [[bin]]
 name = "create-social-card"
