@@ -37,7 +37,7 @@ impl<'a> TryFrom<Color<'a>> for Rgba<u8> {
 #[derive(Debug)]
 pub struct OverlayOptions<'a> {
     pub background: image::DynamicImage,
-    pub paragraphs: Vec<Paragraph<'a>>,
+    pub blocks: Vec<Block<'a>>,
     pub fonts: Vec<FontRef<'a>>,
 }
 
@@ -88,7 +88,7 @@ impl From<VAlign> for glyph_brush_layout::VerticalAlign {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ParagraphBorder<'a> {
+pub struct BlockBorder<'a> {
     #[serde(default)]
     pub width: usize,
     #[serde(default)]
@@ -97,14 +97,14 @@ pub struct ParagraphBorder<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Paragraph<'a> {
+pub struct Block<'a> {
     pub min_size: f32,
     pub max_size: f32,
     pub text: Vec<Text<'a>>,
     pub rect: Rect,
     pub shadow: Option<Shadow<'a>>,
     pub background: Option<(u8, u8, u8, u8)>,
-    pub border: Option<ParagraphBorder<'a>>,
+    pub border: Option<BlockBorder<'a>>,
     #[serde(default)]
     pub wrap: bool,
     #[serde(default)]
@@ -112,7 +112,7 @@ pub struct Paragraph<'a> {
     #[serde(default)]
     pub v_align: VAlign,
 
-    /// Text blocks in a paragraph that do not have their own color will inherit it from this color.
+    /// Text runs in a block that do not have their own color will inherit it from this color.
     #[serde(default)]
     pub color: Color<'a>,
 }
@@ -149,7 +149,7 @@ fn pt_size_to_px_scale<F: Font>(font: &F, pt_size: f32, screen_scale_factor: f32
     PxScale::from(px_per_em * height / units_per_em)
 }
 
-fn fit_glyphs(fonts: &[FontRef], options: &Paragraph) -> Result<Vec<SectionGlyph>> {
+fn fit_glyphs(fonts: &[FontRef], options: &Block) -> Result<Vec<SectionGlyph>> {
     let text_width = options.rect.right - options.rect.left;
     let text_height = options.rect.bottom - options.rect.top;
 
@@ -244,35 +244,33 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Rgba<u8>, Ve
     let width_f32 = width as f32;
     let height_f32 = height as f32;
 
-    for paragraph in &options.paragraphs {
-        if paragraph.rect.left > width_f32
-            || paragraph.rect.right > width_f32
-            || paragraph.rect.top > height_f32
-            || paragraph.rect.bottom > height_f32
+    for block in &options.blocks {
+        if block.rect.left > width_f32
+            || block.rect.right > width_f32
+            || block.rect.top > height_f32
+            || block.rect.bottom > height_f32
         {
             return Err(anyhow!(
                 "Text rect {rect:?} does not fit in image of size {width}x{height}",
-                rect = paragraph.rect,
+                rect = block.rect,
                 width = width,
                 height = height
             ));
-        } else if paragraph.rect.left >= paragraph.rect.right
-            || paragraph.rect.top > paragraph.rect.bottom
-        {
+        } else if block.rect.left >= block.rect.right || block.rect.top > block.rect.bottom {
             return Err(anyhow!("rect must not have a negative size"));
         }
 
-        let glyphs = fit_glyphs(&options.fonts, paragraph)?;
-        // TODO Make all this actually work on a per-paragraph basis
+        let glyphs = fit_glyphs(&options.fonts, block)?;
+        // TODO Make all this actually work on a per-block basis
 
-        let shadow_color = paragraph
+        let shadow_color = block
             .shadow
             .map(|s| s.color.try_into())
             .transpose()?
             .unwrap_or_else(|| Rgba([128, 128, 128, 255]));
 
         let mut text_image = image::RgbaImage::new(width, height);
-        let mut shadow_image = paragraph
+        let mut shadow_image = block
             .shadow
             .map(|s| (s, image::RgbaImage::new(width, height)));
 
