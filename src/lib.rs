@@ -6,7 +6,7 @@ use glyph_brush_layout::{
 use image::{GenericImageView, ImageBuffer, Rgba};
 use serde_derive::Deserialize;
 use std::borrow::Cow;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -22,14 +22,14 @@ impl<'a> Default for Color<'a> {
     }
 }
 
-impl<'a> TryFrom<Color<'a>> for Rgba<u8> {
+impl<'a> TryFrom<&Color<'a>> for Rgba<u8> {
     type Error = anyhow::Error;
 
-    fn try_from(val: Color) -> Result<Rgba<u8>> {
+    fn try_from(val: &Color) -> Result<Rgba<u8>> {
         match val {
-            Color::Rgb(r, g, b) => Ok(Rgba([r, g, b, 255])),
-            Color::Rgba(r, g, b, a) => Ok(Rgba([r, g, b, a])),
-            Color::RgbString(s) => parse_color(&s),
+            Color::Rgb(r, g, b) => Ok(Rgba([*r, *g, *b, 255])),
+            Color::Rgba(r, g, b, a) => Ok(Rgba([*r, *g, *b, *a])),
+            Color::RgbString(s) => parse_color(s),
         }
     }
 }
@@ -90,10 +90,14 @@ impl From<VAlign> for glyph_brush_layout::VerticalAlign {
 #[derive(Debug, Deserialize)]
 pub struct BlockBorder<'a> {
     #[serde(default)]
-    pub width: usize,
+    pub width: u32,
     #[serde(default)]
     pub color: Color<'a>,
-    pub shadow: Option<Shadow<'a>>,
+    // pub shadow: Option<Shadow<'a>>,
+}
+
+fn bool_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,9 +107,10 @@ pub struct Block<'a> {
     pub text: Vec<Text<'a>>,
     pub rect: Rect,
     pub shadow: Option<Shadow<'a>>,
-    pub background: Option<(u8, u8, u8, u8)>,
+    pub background: Option<Color<'a>>,
     pub border: Option<BlockBorder<'a>>,
-    #[serde(default)]
+    /// Wrap the text. Defaults to true
+    #[serde(default = "bool_true")]
     pub wrap: bool,
     #[serde(default)]
     pub h_align: HAlign,
@@ -121,8 +126,7 @@ pub struct Block<'a> {
 pub struct Text<'a> {
     pub font_index: usize,
     pub text: Cow<'a, str>,
-    #[serde(default)]
-    pub color: Color<'a>,
+    pub color: Option<Color<'a>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,10 +140,10 @@ pub struct Shadow<'a> {
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub struct Rect {
-    pub top: f32,
-    pub bottom: f32,
-    pub left: f32,
-    pub right: f32,
+    pub top: u32,
+    pub bottom: u32,
+    pub left: u32,
+    pub right: u32,
 }
 
 fn pt_size_to_px_scale<F: Font>(font: &F, pt_size: f32, screen_scale_factor: f32) -> PxScale {
@@ -154,8 +158,8 @@ fn fit_glyphs(fonts: &[FontRef], options: &Block) -> Result<Vec<SectionGlyph>> {
     let text_height = options.rect.bottom - options.rect.top;
 
     let geometry = SectionGeometry {
-        screen_position: (options.rect.left, options.rect.top),
-        bounds: (text_width, text_height),
+        screen_position: (options.rect.left as f32, options.rect.top as f32),
+        bounds: (text_width as f32, text_height as f32),
     };
 
     let layout = if options.wrap {
@@ -195,7 +199,7 @@ fn fit_glyphs(fonts: &[FontRef], options: &Block) -> Result<Vec<SectionGlyph>> {
         let last_glyph = glyphs.last().unwrap();
         println!("size {}, {:?}", font_size, last_glyph);
         let text_bottom = last_glyph.glyph.position.y + last_glyph.glyph.scale.y;
-        if text_bottom > options.rect.bottom {
+        if text_bottom > options.rect.bottom as f32 {
             font_size -= 4.0;
         } else {
             println!("Chose font size {}", font_size);
@@ -204,12 +208,6 @@ fn fit_glyphs(fonts: &[FontRef], options: &Block) -> Result<Vec<SectionGlyph>> {
     }
 
     Err(anyhow!("Could not fit text in rectangle"))
-}
-
-fn blend(a: u8, b: u8, alpha: f32) -> u8 {
-    let a = (a as f32) * (1.0 - alpha);
-    let b = (b as f32) * alpha;
-    (a + b) as u8
 }
 
 fn parse_color(color: &str) -> Result<Rgba<u8>> {
@@ -245,37 +243,71 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Rgba<u8>, Ve
     let height_f32 = height as f32;
 
     for block in &options.blocks {
-        if block.rect.left > width_f32
-            || block.rect.right > width_f32
-            || block.rect.top > height_f32
-            || block.rect.bottom > height_f32
-        {
+        let mut rect = block.rect.clone();
+        if rect.left > width || rect.right > width || rect.top > height || rect.bottom > height {
             return Err(anyhow!(
                 "Text rect {rect:?} does not fit in image of size {width}x{height}",
-                rect = block.rect,
+                rect = rect,
                 width = width,
                 height = height
             ));
-        } else if block.rect.left >= block.rect.right || block.rect.top > block.rect.bottom {
+        } else if rect.left >= rect.right || rect.top > rect.bottom {
             return Err(anyhow!("rect must not have a negative size"));
         }
 
         let glyphs = fit_glyphs(&options.fonts, block)?;
-        // TODO Make all this actually work on a per-block basis
 
         let shadow_color = block
             .shadow
-            .map(|s| s.color.try_into())
+            .as_ref()
+            .map(|s| image::Rgba::<u8>::try_from(&s.color))
             .transpose()?
             .unwrap_or_else(|| Rgba([128, 128, 128, 255]));
 
-        let mut text_image = image::RgbaImage::new(width, height);
+        let border_pixel = block
+            .border
+            .as_ref()
+            .map(|b| image::Rgba::<u8>::try_from(&b.color))
+            .transpose()?
+            .unwrap_or_else(|| Rgba([0, 0, 0, 255]));
+        let border_width = block.border.as_ref().map(|b| b.width).unwrap_or(0);
+        let transparent = image::Rgba::<u8>([0, 0, 0, 0]);
+
+        let bg_pixel = block
+            .background
+            .as_ref()
+            .map(image::Rgba::<u8>::try_from)
+            .transpose()?
+            .unwrap_or_else(|| Rgba([0, 0, 0, 0]));
+        let border_left = rect.left + border_width;
+        let border_right = rect.right - border_width;
+        let border_top = rect.top + border_width;
+        let border_bottom = rect.bottom - border_width;
+        let mut text_image = image::RgbaImage::from_fn(width, height, |x, y| {
+            if x < rect.left || x > rect.right || y < rect.top || y > rect.bottom {
+                transparent
+            } else if x < border_left || x > border_right || y < border_top || y > border_bottom {
+                border_pixel
+            } else {
+                bg_pixel
+            }
+        });
         let mut shadow_image = block
             .shadow
+            .as_ref()
             .map(|s| (s, image::RgbaImage::new(width, height)));
+
+        if let Some(border) = block.border.as_ref() {
+            rect.left += border.width;
+            rect.right -= border.width;
+            rect.top += border.width;
+            rect.bottom -= border.width;
+        }
 
         for glyph in glyphs {
             // println!("{:?}", glyph);
+            let run = &block.text[glyph.section_index];
+            let color = image::Rgba::<u8>::try_from(run.color.as_ref().unwrap_or(&block.color))?;
             let glyph_font = &options.fonts.as_slice()[glyph.font_id];
             if let Some(g) = glyph_font.outline_glyph(glyph.glyph) {
                 // println!("{:?}", g.px_bounds());
@@ -283,19 +315,27 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Rgba<u8>, Ve
                 let x_base = r.min.x as u32;
                 let y_base = r.min.y as u32;
                 g.draw(|x, y, c| {
-                    let alpha = (c * 255.0) as u8;
                     // println!("{x}, {y}, {c}", x = x, y = y, c = c);
-                    let mut pixel = image::Rgba([red, green, blue, alpha]);
+                    let pixel = if c < 1.0 {
+                        let mut p = color.clone();
+                        p[3] = ((p[3] as f32) * c) as u8;
+                        p
+                    } else {
+                        color
+                    };
                     text_image.put_pixel(x_base + x, y_base + y, pixel);
 
                     if let Some((s, i)) = shadow_image.as_mut() {
                         let shadow_x = x_base + x + s.x;
                         let shadow_y = y_base + y + s.y;
                         if i.in_bounds(shadow_x, shadow_y) {
-                            let mut pixel = shadow_color.clone();
-                            if c < 1.0 {
-                                pixel[3] = ((pixel[3] as f32) * c) as u8;
-                            }
+                            let pixel = if c < 1.0 {
+                                let mut p = shadow_color.clone();
+                                p[3] = ((p[3] as f32) * c) as u8;
+                                p
+                            } else {
+                                color
+                            };
 
                             i.put_pixel(shadow_x, shadow_y, pixel);
                         }
