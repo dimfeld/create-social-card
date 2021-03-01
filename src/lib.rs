@@ -8,6 +8,12 @@ use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::convert::TryFrom;
 
+type Pixel = image::Rgba<u8>;
+
+fn pixel(red: u8, green: u8, blue: u8, alpha: u8) -> Pixel {
+    Rgba([red, green, blue, alpha])
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Color<'a> {
@@ -22,13 +28,13 @@ impl<'a> Default for Color<'a> {
     }
 }
 
-impl<'a> TryFrom<&Color<'a>> for Rgba<u8> {
+impl<'a> TryFrom<&Color<'a>> for Pixel {
     type Error = anyhow::Error;
 
-    fn try_from(val: &Color) -> Result<Rgba<u8>> {
+    fn try_from(val: &Color) -> Result<Pixel> {
         match val {
-            Color::Rgb(r, g, b) => Ok(Rgba([*r, *g, *b, 255])),
-            Color::Rgba(r, g, b, a) => Ok(Rgba([*r, *g, *b, *a])),
+            Color::Rgb(r, g, b) => Ok(pixel(*r, *g, *b, 255)),
+            Color::Rgba(r, g, b, a) => Ok(pixel(*r, *g, *b, *a)),
             Color::RgbString(s) => parse_color(s),
         }
     }
@@ -210,7 +216,7 @@ fn fit_glyphs(fonts: &[FontRef], options: &Block) -> Result<Vec<SectionGlyph>> {
     Err(anyhow!("Could not fit text in rectangle"))
 }
 
-fn parse_color(color: &str) -> Result<Rgba<u8>> {
+fn parse_color(color: &str) -> Result<Pixel> {
     let hex = if color.starts_with('#') {
         &color[1..]
     } else {
@@ -229,14 +235,14 @@ fn parse_color(color: &str) -> Result<Rgba<u8>> {
         let green: u8 = ((color >> 8) & 0xFF) as u8;
         let blue: u8 = ((color) & 0xFF) as u8;
 
-        Ok(Rgba([red, green, blue, alpha]))
+        Ok(pixel(red, green, blue, alpha))
     } else {
         Err(anyhow!("Color must be 6 or 8 hex digits"))
     }
 }
 
 // TODO Proper library errors instead of anyhow
-pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u8>>> {
     let mut bg = options.background.to_rgba8();
     let (width, height) = bg.dimensions();
     let width_f32 = width as f32;
@@ -260,25 +266,25 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Rgba<u8>, Ve
         let shadow_color = block
             .shadow
             .as_ref()
-            .map(|s| image::Rgba::<u8>::try_from(&s.color))
+            .map(|s| Pixel::try_from(&s.color))
             .transpose()?
-            .unwrap_or_else(|| Rgba([128, 128, 128, 255]));
+            .unwrap_or_else(|| pixel(128, 128, 128, 255));
 
         let border_pixel = block
             .border
             .as_ref()
-            .map(|b| image::Rgba::<u8>::try_from(&b.color))
+            .map(|b| Pixel::try_from(&b.color))
             .transpose()?
-            .unwrap_or_else(|| Rgba([0, 0, 0, 255]));
+            .unwrap_or_else(|| pixel(0, 0, 0, 255));
         let border_width = block.border.as_ref().map(|b| b.width).unwrap_or(0);
-        let transparent = image::Rgba::<u8>([0, 0, 0, 0]);
+        let transparent = pixel(0, 0, 0, ]);
 
         let bg_pixel = block
             .background
             .as_ref()
-            .map(image::Rgba::<u8>::try_from)
+            .map(Pixel::try_from)
             .transpose()?
-            .unwrap_or_else(|| Rgba([0, 0, 0, 0]));
+            .unwrap_or_else(|| pixel(0, 0, 0, 0));
         let border_left = rect.left + border_width;
         let border_right = rect.right - border_width;
         let border_top = rect.top + border_width;
@@ -307,7 +313,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Rgba<u8>, Ve
         for glyph in glyphs {
             // println!("{:?}", glyph);
             let run = &block.text[glyph.section_index];
-            let color = image::Rgba::<u8>::try_from(run.color.as_ref().unwrap_or(&block.color))?;
+            let color = Pixel::try_from(run.color.as_ref().unwrap_or(&block.color))?;
             let glyph_font = &options.fonts.as_slice()[glyph.font_id];
             if let Some(g) = glyph_font.outline_glyph(glyph.glyph) {
                 // println!("{:?}", g.px_bounds());
