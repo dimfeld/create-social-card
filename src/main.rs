@@ -15,9 +15,6 @@ struct Args {
 
     #[structopt(long = "output", short = "o", help = "output path")]
     output: PathBuf,
-
-    #[structopt(long = "text", short = "t", help = "the text to render")]
-    text: String,
 }
 
 #[derive(Deserialize)]

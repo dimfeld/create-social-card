@@ -166,6 +166,7 @@ fn pt_size_to_px_scale<F: Font>(font: &F, pt_size: f32, screen_scale_factor: f32
 }
 
 fn fit_glyphs(fonts: &[FontDef], rect: &Rect, options: &Block) -> Result<Vec<SectionGlyph>> {
+    println!("Rect {:?}", rect);
     let text_width = rect.right - rect.left;
     let text_height = rect.bottom - rect.top;
 
@@ -217,7 +218,7 @@ fn fit_glyphs(fonts: &[FontDef], rect: &Rect, options: &Block) -> Result<Vec<Sec
 
     let font_refs = fonts.iter().map(|f| &f.font).collect::<Vec<_>>();
 
-    while font_size > options.min_size {
+    while font_size >= options.min_size {
         // println!("Trying font size {font_size}", font_size = font_size);
         for i in sections.iter_mut() {
             i.scale = pt_size_to_px_scale(&font_refs.as_slice()[i.font_id], font_size, 1.0);
@@ -228,7 +229,7 @@ fn fit_glyphs(fonts: &[FontDef], rect: &Rect, options: &Block) -> Result<Vec<Sec
         let last_glyph = glyphs.last().unwrap();
         println!("size {}, {:?}", font_size, last_glyph);
         let text_bottom = last_glyph.glyph.position.y + last_glyph.glyph.scale.y;
-        if text_bottom > rect.bottom as f32 {
+        if text_bottom >= rect.bottom as f32 {
             font_size -= 4.0;
         } else {
             println!("Chose font size {}", font_size);
