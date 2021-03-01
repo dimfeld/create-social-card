@@ -45,7 +45,8 @@ fn main() -> Result<()> {
         .fonts
         .into_iter()
         .map(|f| {
-            let font_data = std::fs::read(&f.path).context("Opening font file")?;
+            let font_data = std::fs::read(&f.path)
+                .with_context(|| format!("Opening font file {:?}", f.path))?;
             Ok((f, font_data))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -54,7 +55,8 @@ fn main() -> Result<()> {
         .iter()
         .enumerate()
         .map(|(i, f)| {
-            let font = FontRef::try_from_slice_and_index(&f.1, i as u32).context("Loading font")?;
+            let font = FontRef::try_from_slice_and_index(&f.1, i as u32)
+                .with_context(|| format!("Loading font {:?}", f.0.path))?;
             Ok(lib::FontDef {
                 name: Cow::from(&f.0.name),
                 font,
