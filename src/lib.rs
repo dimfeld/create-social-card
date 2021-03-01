@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use glyph_brush_layout::{
     ab_glyph::{Font, FontRef, PxScale},
-    FontId, GlyphPositioner, Layout, SectionGeometry, SectionGlyph, SectionText,
+    FontId, GlyphPositioner, Layout, LineBreaker, SectionGeometry, SectionGlyph, SectionText,
 };
 use image::{GenericImageView, ImageBuffer, Rgba};
 use serde_derive::Deserialize;
@@ -14,7 +14,7 @@ fn pixel(red: u8, green: u8, blue: u8, alpha: u8) -> Pixel {
     Rgba([red, green, blue, alpha])
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Color<'a> {
     Rgb(u8, u8, u8),
@@ -108,9 +108,9 @@ pub struct BlockBorder<'a> {
     pub shadow: Option<Shadow<'a>>,
 }
 
-// fn bool_true() -> bool {
-//     true
-// }
+fn bool_true() -> bool {
+    true
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Block<'a> {
@@ -123,8 +123,8 @@ pub struct Block<'a> {
     pub border: Option<BlockBorder<'a>>,
     pub padding: Option<Rect>,
     // /// Wrap the text. Defaults to true
-    // #[serde(default = "bool_true")]
-    // pub wrap: bool,
+    #[serde(default = "bool_true")]
+    pub wrap: bool,
     #[serde(default)]
     pub h_align: HAlign,
     #[serde(default)]
@@ -135,7 +135,7 @@ pub struct Block<'a> {
     pub color: Color<'a>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Text<'a> {
     pub font: Cow<'a, str>,
     pub text: Cow<'a, str>,
@@ -165,7 +165,11 @@ fn pt_size_to_px_scale<F: Font>(font: &F, pt_size: f32, screen_scale_factor: f32
     PxScale::from(px_per_em * height / units_per_em)
 }
 
-fn fit_glyphs(fonts: &[FontDef], rect: &Rect, options: &Block) -> Result<Vec<SectionGlyph>> {
+fn fit_glyphs<'a>(
+    fonts: &[FontDef],
+    rect: &Rect,
+    options: &'a Block,
+) -> Result<Vec<(Vec<Cow<'a, Text<'a>>>, Vec<SectionGlyph>)>> {
     println!("Rect {:?}", rect);
     let text_width = rect.right - rect.left;
     let text_height = rect.bottom - rect.top;
@@ -175,69 +179,180 @@ fn fit_glyphs(fonts: &[FontDef], rect: &Rect, options: &Block) -> Result<Vec<Sec
         bounds: (text_width as f32, text_height as f32),
     };
 
-    // TODO In the nonwrapping case we need to handle 2 extra things:
-    // 1. Manually split each line and render them separately, adding to y each time.
-    // 2. Detect "too large" as a line not rendering all its glyphs
-    //
-    // let layout = if options.wrap {
-    //     Layout::Wrap {
-    //         line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
-    //         h_align: options.h_align.into(),
-    //         v_align: options.v_align.into(),
-    //     }
-    // } else {
-    //     Layout::SingleLine {
-    //         line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
-    //         h_align: options.h_align.into(),
-    //         v_align: options.v_align.into(),
-    //     }
-    // };
+    let (layout, lines, mut font_size) = if options.wrap {
+        let layout = Layout::Wrap {
+            line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
+            h_align: options.h_align.into(),
+            v_align: options.v_align.into(),
+        };
 
-    let layout = Layout::Wrap {
-        line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
-        h_align: options.h_align.into(),
-        v_align: options.v_align.into(),
-    };
-    let mut font_size = options.max_size;
+        // Just a single line here and the layout algorithm will handle the wrapping.
+        let text = options.text.iter().map(Cow::Borrowed).collect::<Vec<_>>();
+        let lines = vec![text];
 
-    let mut sections = options
-        .text
-        .iter()
-        .map(|t| {
-            Ok(SectionText {
-                text: &t.text,
-                font_id: fonts
-                    .iter()
-                    .position(|f| f.name == t.font)
-                    .map(|index| FontId(index))
-                    .ok_or_else(|| anyhow!("Could not find font named {}", t.font))?,
-                scale: PxScale::from(0.0), // This will be filled in below
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+        (layout, lines, options.max_size)
+    } else {
+        let line_breaker = glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker;
+        let layout = Layout::SingleLine {
+            line_breaker,
+            h_align: options.h_align.into(),
+            v_align: options.v_align.into(),
+        };
 
-    let font_refs = fonts.iter().map(|f| &f.font).collect::<Vec<_>>();
+        // In non-wrapping mode we need to manually calculate how many lines can fit in the vertical
+        // space.
 
-    while font_size >= options.min_size {
-        // println!("Trying font size {font_size}", font_size = font_size);
-        for i in sections.iter_mut() {
-            i.scale = pt_size_to_px_scale(&font_refs.as_slice()[i.font_id], font_size, 1.0);
+        let mut lines = vec![];
+        let mut current_line = Vec::new();
+        for text in &options.text {
+            let mut last_index = 0;
+            println!("Text {}", text.text);
+            for index in line_breaker.line_breaks(&text.text) {
+                if let glyph_brush_layout::LineBreak::Hard(offset) = index {
+                    println!("Break at offset {}", offset);
+                    let t = text.text[last_index..offset].trim_matches('\n');
+
+                    if !t.is_empty() {
+                        current_line.push(Cow::Owned(Text {
+                            text: Cow::from(t),
+                            font: text.font.clone(),
+                            color: text.color.clone(),
+                        }));
+                    }
+                    lines.push(current_line);
+                    current_line = Vec::new();
+                    last_index = offset;
+                }
+            }
+
+            if last_index == 0 {
+                current_line.push(Cow::Borrowed(text));
+            }
         }
 
-        let glyphs = layout.calculate_glyphs(font_refs.as_slice(), &geometry, &sections);
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
 
-        let last_glyph = glyphs.last().unwrap();
-        println!("size {}, {:?}", font_size, last_glyph);
-        let text_bottom = last_glyph.glyph.position.y + last_glyph.glyph.scale.y;
-        if text_bottom >= rect.bottom as f32 {
+        let mut font_size = options.max_size;
+
+        let lines_len_f32 = lines.len() as f32;
+        let text_height_f32 = text_height as f32;
+        // We assume that the first font in this block is representative of the height of all the fonts
+        let sizing_font = fonts
+            .iter()
+            .find(|f| f.name == options.text[0].font)
+            .ok_or_else(|| anyhow!("Could not find font named {}", options.text[0].font))?;
+        while font_size >= options.min_size
+            && pt_size_to_px_scale(&sizing_font.font, font_size, 1.0).y * lines_len_f32
+                >= text_height_f32
+        {
             font_size -= 4.0;
-        } else {
-            println!("Chose font size {}", font_size);
-            return Ok(glyphs);
+        }
+
+        if font_size < options.min_size {
+            return Err(anyhow!("Could not fit text in rectangle"));
+        }
+
+        (layout, lines, font_size)
+    };
+
+    let mut line_sections = lines
+        .iter()
+        .map(|line| {
+            let sections = line
+                .iter()
+                .map(|t| {
+                    Ok(SectionText {
+                        text: &t.text,
+                        font_id: fonts
+                            .iter()
+                            .position(|f| f.name == t.font)
+                            .map(|index| FontId(index))
+                            .ok_or_else(|| anyhow!("Could not find font named {}", t.font))?,
+                        scale: PxScale::from(0.0), // This will be filled in below
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(sections)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    println!("Sections {:?}", line_sections);
+
+    let font_refs = fonts.iter().map(|f| &f.font).collect::<Vec<_>>();
+    for sections in line_sections.as_mut_slice().iter_mut() {
+        let text_length = sections
+            .iter()
+            .fold(0, |acc, section| acc + section.text.len());
+        while font_size >= options.min_size {
+            // println!("Trying font size {font_size}", font_size = font_size);
+            for i in sections.iter_mut() {
+                i.scale = pt_size_to_px_scale(&font_refs.as_slice()[i.font_id], font_size, 1.0);
+            }
+
+            let glyphs = layout.calculate_glyphs(font_refs.as_slice(), &geometry, &sections);
+
+            let fits = if options.wrap {
+                // When wrapping, the text fits if it doesn't exceed the vertical size available.
+                // calculate_glyphs handles fitting the text horizontally.
+                let last_glyph = glyphs.last().unwrap();
+                println!("size {}, {:?}", font_size, last_glyph);
+                let text_bottom = last_glyph.glyph.position.y + last_glyph.glyph.scale.y;
+                text_bottom < rect.bottom as f32
+            } else {
+                // In non-wrapping mode, a line fits if we can render all of its glyphs.
+                println!(
+                    "size {} rendered {} glyphs out of {}",
+                    font_size,
+                    glyphs.len(),
+                    text_length
+                );
+                glyphs.len() == text_length
+            };
+
+            if fits {
+                println!("Chose font size {}", font_size);
+                break;
+            } else {
+                font_size -= 4.0;
+            }
         }
     }
 
-    Err(anyhow!("Could not fit text in rectangle"))
+    if font_size < options.min_size {
+        return Err(anyhow!("Could not fit text in rectangle"));
+    }
+
+    // Go back through and render all the lines with the chosen font size.
+    let sizing_font_id = line_sections[0][0].font_id;
+    let sizing_font = &font_refs.as_slice()[sizing_font_id];
+    let line_height = pt_size_to_px_scale(&sizing_font, font_size, 1.0);
+    let result_glyphs = line_sections
+        .into_iter()
+        .enumerate()
+        .map(|(line_index, mut sections)| {
+            for i in sections.iter_mut() {
+                i.scale = line_height;
+            }
+
+            let mut glyphs = layout.calculate_glyphs(font_refs.as_slice(), &geometry, &sections);
+            let baseline = line_index as f32 * line_height.y;
+            for glyph in glyphs.iter_mut() {
+                glyph.glyph.position.y += baseline;
+            }
+
+            glyphs
+        })
+        .collect::<Vec<_>>();
+
+    // And return each line's glyphs with the line that configured it.
+    let result = lines
+        .into_iter()
+        .zip(result_glyphs.into_iter())
+        .collect::<Vec<_>>();
+
+    Ok(result)
 }
 
 fn parse_color(color: &str) -> Result<Pixel> {
@@ -368,45 +483,47 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
             rect.bottom -= padding.bottom;
         }
 
-        let glyphs = fit_glyphs(&options.fonts, &rect, block)?;
+        let lines = fit_glyphs(&options.fonts, &rect, block)?;
 
-        for glyph in glyphs {
-            // println!("{:?}", glyph);
-            let run = &block.text[glyph.section_index];
-            let color = Pixel::try_from(run.color.as_ref().unwrap_or(&block.color))?;
-            let glyph_font = &font_refs.as_slice()[glyph.font_id];
-            if let Some(g) = glyph_font.outline_glyph(glyph.glyph) {
-                // println!("{:?}", g.px_bounds());
-                let r = g.px_bounds();
-                let x_base = r.min.x as u32;
-                let y_base = r.min.y as u32;
-                g.draw(|x, y, c| {
-                    // println!("{x}, {y}, {c}", x = x, y = y, c = c);
-                    let pixel = if c < 1.0 {
-                        let mut p = color.clone();
-                        p[3] = ((p[3] as f32) * c) as u8;
-                        p
-                    } else {
-                        color
-                    };
-                    text_image.put_pixel(x_base + x, y_base + y, pixel);
+        for (texts, glyphs) in lines {
+            for glyph in glyphs {
+                // println!("{:?}", glyph);
+                let run = &texts[glyph.section_index];
+                let color = Pixel::try_from(run.color.as_ref().unwrap_or(&block.color))?;
+                let glyph_font = &font_refs.as_slice()[glyph.font_id];
+                if let Some(g) = glyph_font.outline_glyph(glyph.glyph) {
+                    // println!("{:?}", g.px_bounds());
+                    let r = g.px_bounds();
+                    let x_base = r.min.x as u32;
+                    let y_base = r.min.y as u32;
+                    g.draw(|x, y, c| {
+                        // println!("{x}, {y}, {c}", x = x, y = y, c = c);
+                        let pixel = if c < 1.0 {
+                            let mut p = color.clone();
+                            p[3] = ((p[3] as f32) * c) as u8;
+                            p
+                        } else {
+                            color
+                        };
+                        text_image.put_pixel(x_base + x, y_base + y, pixel);
 
-                    if let Some((s, i)) = shadow_image.as_mut() {
-                        let shadow_x = x_base + x + s.x;
-                        let shadow_y = y_base + y + s.y;
-                        if i.in_bounds(shadow_x, shadow_y) {
-                            let pixel = if c < 1.0 {
-                                let mut p = shadow_color.clone();
-                                p[3] = ((p[3] as f32) * c) as u8;
-                                p
-                            } else {
-                                color
-                            };
+                        if let Some((s, i)) = shadow_image.as_mut() {
+                            let shadow_x = x_base + x + s.x;
+                            let shadow_y = y_base + y + s.y;
+                            if i.in_bounds(shadow_x, shadow_y) {
+                                let pixel = if c < 1.0 {
+                                    let mut p = shadow_color.clone();
+                                    p[3] = ((p[3] as f32) * c) as u8;
+                                    p
+                                } else {
+                                    color
+                                };
 
-                            i.put_pixel(shadow_x, shadow_y, pixel);
+                                i.put_pixel(shadow_x, shadow_y, pixel);
+                            }
                         }
-                    }
-                })
+                    })
+                }
             }
         }
 

@@ -52,8 +52,9 @@ fn main() -> Result<()> {
 
     let fonts = font_data
         .iter()
-        .map(|f| {
-            let font = FontRef::try_from_slice(&f.1).context("Loading font")?;
+        .enumerate()
+        .map(|(i, f)| {
+            let font = FontRef::try_from_slice_and_index(&f.1, i as u32).context("Loading font")?;
             Ok(lib::FontDef {
                 name: Cow::from(&f.0.name),
                 font,
