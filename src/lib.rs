@@ -364,6 +364,19 @@ fn fit_glyphs<'a>(
     Ok(result)
 }
 
+fn blend(dest: Pixel, src: Pixel, src_alpha: f32) -> Pixel {
+    if src_alpha >= 1.0 {
+        return src;
+    }
+
+    pixel(
+        ((dest[0] as f32) * (1.0 - src_alpha) + (src[0] as f32) * src_alpha) as u8,
+        ((dest[1] as f32) * (1.0 - src_alpha) + (src[1] as f32) * src_alpha) as u8,
+        ((dest[2] as f32) * (1.0 - src_alpha) + (src[2] as f32) * src_alpha) as u8,
+        ((dest[3] as f32) * (1.0 - src_alpha) + (src_alpha * 255.0)) as u8,
+    )
+}
+
 fn parse_color(color: &str) -> Result<Pixel> {
     let hex = if color.starts_with('#') {
         &color[1..]
@@ -378,7 +391,7 @@ fn parse_color(color: &str) -> Result<Pixel> {
         color = color >> 8;
     }
 
-    if hex.len() == 6 {
+    if hex.len() == 6 || hex.len() == 8 {
         let red: u8 = ((color >> 16) & 0xFF) as u8;
         let green: u8 = ((color >> 8) & 0xFF) as u8;
         let blue: u8 = ((color) & 0xFF) as u8;
@@ -446,10 +459,19 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
                 }
             });
 
-            let shadow_bg_image = s
+            let mut shadow_bg_image = s
                 .blur
                 .map(|blur_sigma| image::imageops::blur(&shadow_bg_image, blur_sigma))
                 .unwrap_or(shadow_bg_image);
+
+            // The shadow should not show through if the block is transparent, so clear out all the pixels for the
+            // block's rect.
+            let bg_placeholder = image::RgbaImage::from_pixel(
+                rect.right - rect.left + 1,
+                rect.bottom - rect.top + 1,
+                transparent,
+            );
+            image::imageops::replace(&mut shadow_bg_image, &bg_placeholder, rect.left, rect.top);
 
             image::imageops::overlay(&mut bg, &shadow_bg_image, 0, 0);
         }
@@ -510,7 +532,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
                         let pixel = if c < 1.0 {
                             let mut p = color.clone();
                             p[3] = ((p[3] as f32) * c) as u8;
-                            p
+                            blend(bg_pixel, p, c)
                         } else {
                             color
                         };
