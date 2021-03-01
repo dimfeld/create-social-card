@@ -108,9 +108,9 @@ pub struct BlockBorder<'a> {
     pub shadow: Option<Shadow<'a>>,
 }
 
-fn bool_true() -> bool {
-    true
-}
+// fn bool_true() -> bool {
+//     true
+// }
 
 #[derive(Debug, Deserialize)]
 pub struct Block<'a> {
@@ -121,9 +121,10 @@ pub struct Block<'a> {
     pub shadow: Option<Shadow<'a>>,
     pub background: Option<Color<'a>>,
     pub border: Option<BlockBorder<'a>>,
-    /// Wrap the text. Defaults to true
-    #[serde(default = "bool_true")]
-    pub wrap: bool,
+    pub padding: Option<Rect>,
+    // /// Wrap the text. Defaults to true
+    // #[serde(default = "bool_true")]
+    // pub wrap: bool,
     #[serde(default)]
     pub h_align: HAlign,
     #[serde(default)]
@@ -164,29 +165,38 @@ fn pt_size_to_px_scale<F: Font>(font: &F, pt_size: f32, screen_scale_factor: f32
     PxScale::from(px_per_em * height / units_per_em)
 }
 
-fn fit_glyphs(fonts: &[FontDef], options: &Block) -> Result<Vec<SectionGlyph>> {
-    let text_width = options.rect.right - options.rect.left;
-    let text_height = options.rect.bottom - options.rect.top;
+fn fit_glyphs(fonts: &[FontDef], rect: &Rect, options: &Block) -> Result<Vec<SectionGlyph>> {
+    let text_width = rect.right - rect.left;
+    let text_height = rect.bottom - rect.top;
 
     let geometry = SectionGeometry {
-        screen_position: (options.rect.left as f32, options.rect.top as f32),
+        screen_position: (rect.left as f32, rect.top as f32),
         bounds: (text_width as f32, text_height as f32),
     };
 
-    let layout = if options.wrap {
-        Layout::Wrap {
-            line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
-            h_align: options.h_align.into(),
-            v_align: options.v_align.into(),
-        }
-    } else {
-        Layout::SingleLine {
-            line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
-            h_align: options.h_align.into(),
-            v_align: options.v_align.into(),
-        }
-    };
+    // TODO In the nonwrapping case we need to handle 2 extra things:
+    // 1. Manually split each line and render them separately, adding to y each time.
+    // 2. Detect "too large" as a line not rendering all its glyphs
+    //
+    // let layout = if options.wrap {
+    //     Layout::Wrap {
+    //         line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
+    //         h_align: options.h_align.into(),
+    //         v_align: options.v_align.into(),
+    //     }
+    // } else {
+    //     Layout::SingleLine {
+    //         line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
+    //         h_align: options.h_align.into(),
+    //         v_align: options.v_align.into(),
+    //     }
+    // };
 
+    let layout = Layout::Wrap {
+        line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
+        h_align: options.h_align.into(),
+        v_align: options.v_align.into(),
+    };
     let mut font_size = options.max_size;
 
     let mut sections = options
@@ -218,7 +228,7 @@ fn fit_glyphs(fonts: &[FontDef], options: &Block) -> Result<Vec<SectionGlyph>> {
         let last_glyph = glyphs.last().unwrap();
         println!("size {}, {:?}", font_size, last_glyph);
         let text_bottom = last_glyph.glyph.position.y + last_glyph.glyph.scale.y;
-        if text_bottom > options.rect.bottom as f32 {
+        if text_bottom > rect.bottom as f32 {
             font_size -= 4.0;
         } else {
             println!("Chose font size {}", font_size);
@@ -273,8 +283,6 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
         } else if rect.left >= rect.right || rect.top > rect.bottom {
             return Err(anyhow!("rect must not have a negative size"));
         }
-
-        let glyphs = fit_glyphs(&options.fonts, block)?;
 
         let shadow_color = block
             .shadow
@@ -351,6 +359,15 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
             rect.top += border.width;
             rect.bottom -= border.width;
         }
+
+        if let Some(padding) = block.padding.as_ref() {
+            rect.left += padding.left;
+            rect.right -= padding.right;
+            rect.top += padding.top;
+            rect.bottom -= padding.bottom;
+        }
+
+        let glyphs = fit_glyphs(&options.fonts, &rect, block)?;
 
         for glyph in glyphs {
             // println!("{:?}", glyph);
