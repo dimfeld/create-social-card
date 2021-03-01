@@ -227,6 +227,15 @@ fn fit_glyphs<'a>(
 
             if last_index == 0 {
                 current_line.push(Cow::Borrowed(text));
+            } else if last_index < text.text.len() {
+                let t = text.text[last_index..].trim_matches('\n');
+                if !t.is_empty() {
+                    current_line.push(Cow::Owned(Text {
+                        text: Cow::from(t),
+                        font: text.font.clone(),
+                        color: text.color.clone(),
+                    }));
+                }
             }
         }
 
