@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use glyph_brush_layout::ab_glyph::FontRef;
 use serde_derive::Deserialize;
+use std::borrow::Cow;
 use std::path::PathBuf;
 use structopt::StructOpt;
 
 mod lib;
-use lib::{overlay_text, OverlayOptions, Rect, Shadow};
+use lib::{overlay_text, OverlayOptions};
 
 #[derive(Debug, StructOpt)]
 struct Args {
@@ -20,14 +21,16 @@ struct Args {
 }
 
 #[derive(Deserialize)]
-struct Config {
+struct FontConfig {
+    name: String,
+    path: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct Config<'a> {
     background: PathBuf,
-    font: PathBuf,
-    text_rect: Rect,
-    max_size: Option<f32>,
-    min_size: Option<f32>,
-    color: String,
-    shadow: Option<Shadow>,
+    fonts: Vec<FontConfig>,
+    blocks: Vec<lib::Block<'a>>,
 }
 
 fn main() -> Result<()> {
@@ -41,21 +44,30 @@ fn main() -> Result<()> {
 
     let bg = image::open(&config.background).context("Opening background image")?;
 
-    let max_size = config.max_size.unwrap_or(64.0);
-    let min_size = config.min_size.unwrap_or(6.0);
+    let font_data = config
+        .fonts
+        .into_iter()
+        .map(|f| {
+            let font_data = std::fs::read(&f.path).context("Opening font file")?;
+            Ok((f, font_data))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    let font_data = std::fs::read(&config.font).context("Opening font file")?;
-    let font = FontRef::try_from_slice(&font_data).context("Loading font")?;
+    let fonts = font_data
+        .iter()
+        .map(|f| {
+            let font = FontRef::try_from_slice(&f.1).context("Loading font")?;
+            Ok(lib::FontDef {
+                name: Cow::from(&f.0.name),
+                font,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let options = OverlayOptions {
-        text: &args.text,
         background: bg,
-        font: &font,
-        text_rect: &config.text_rect,
-        min_size,
-        max_size,
-        color: &config.color,
-        shadow: config.shadow.as_ref(),
+        fonts,
+        blocks: config.blocks,
     };
 
     let result = overlay_text(&options)?;

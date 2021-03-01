@@ -136,7 +136,6 @@ dependencies = [
  "anyhow",
  "glyph_brush_layout",
  "image",
- "pix",
  "serde",
  "serde_derive",
  "structopt",
@@ -372,12 +371,6 @@ checksum = "948b27637ba56144c62d3415929ef18986b3a383137ebcbe97d9362a968bf997"
 dependencies = [
  "ttf-parser",
 ]
-
-[[package]]
-name = "pix"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bea9d5c668f13b4a1b97d848780e00cfabf76eb83538129c264c0c6d6a968047"
 
 [[package]]
 name = "png"

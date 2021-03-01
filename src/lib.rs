@@ -41,10 +41,16 @@ impl<'a> TryFrom<&Color<'a>> for Pixel {
 }
 
 #[derive(Debug)]
+pub struct FontDef<'a> {
+    pub name: Cow<'a, str>,
+    pub font: FontRef<'a>,
+}
+
+#[derive(Debug)]
 pub struct OverlayOptions<'a> {
     pub background: image::DynamicImage,
     pub blocks: Vec<Block<'a>>,
-    pub fonts: Vec<FontRef<'a>>,
+    pub fonts: Vec<FontDef<'a>>,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
@@ -99,7 +105,7 @@ pub struct BlockBorder<'a> {
     pub width: u32,
     #[serde(default)]
     pub color: Color<'a>,
-    // pub shadow: Option<Shadow<'a>>,
+    pub shadow: Option<Shadow<'a>>,
 }
 
 fn bool_true() -> bool {
@@ -130,7 +136,7 @@ pub struct Block<'a> {
 
 #[derive(Debug, Deserialize)]
 pub struct Text<'a> {
-    pub font_index: usize,
+    pub font: Cow<'a, str>,
     pub text: Cow<'a, str>,
     pub color: Option<Color<'a>>,
 }
@@ -140,8 +146,7 @@ pub struct Shadow<'a> {
     pub x: u32,
     pub y: u32,
     pub blur: Option<f32>,
-    #[serde(default)]
-    pub color: Color<'a>,
+    pub color: Option<Color<'a>>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -159,7 +164,7 @@ fn pt_size_to_px_scale<F: Font>(font: &F, pt_size: f32, screen_scale_factor: f32
     PxScale::from(px_per_em * height / units_per_em)
 }
 
-fn fit_glyphs(fonts: &[FontRef], options: &Block) -> Result<Vec<SectionGlyph>> {
+fn fit_glyphs(fonts: &[FontDef], options: &Block) -> Result<Vec<SectionGlyph>> {
     let text_width = options.rect.right - options.rect.left;
     let text_height = options.rect.bottom - options.rect.top;
 
@@ -187,20 +192,28 @@ fn fit_glyphs(fonts: &[FontRef], options: &Block) -> Result<Vec<SectionGlyph>> {
     let mut sections = options
         .text
         .iter()
-        .map(|t| SectionText {
-            text: &t.text,
-            font_id: FontId(t.font_index),
-            scale: PxScale::from(0.0), // This will be filled in later
+        .map(|t| {
+            Ok(SectionText {
+                text: &t.text,
+                font_id: fonts
+                    .iter()
+                    .position(|f| f.name == t.font)
+                    .map(|index| FontId(index))
+                    .ok_or_else(|| anyhow!("Could not find font named {}", t.font))?,
+                scale: PxScale::from(0.0), // This will be filled in below
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
+
+    let font_refs = fonts.iter().map(|f| &f.font).collect::<Vec<_>>();
 
     while font_size > options.min_size {
         // println!("Trying font size {font_size}", font_size = font_size);
         for i in sections.iter_mut() {
-            i.scale = pt_size_to_px_scale(&fonts[i.font_id], font_size, 1.0);
+            i.scale = pt_size_to_px_scale(&font_refs.as_slice()[i.font_id], font_size, 1.0);
         }
 
-        let glyphs = layout.calculate_glyphs(fonts, &geometry, &sections);
+        let glyphs = layout.calculate_glyphs(font_refs.as_slice(), &geometry, &sections);
 
         let last_glyph = glyphs.last().unwrap();
         println!("size {}, {:?}", font_size, last_glyph);
@@ -245,8 +258,8 @@ fn parse_color(color: &str) -> Result<Pixel> {
 pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u8>>> {
     let mut bg = options.background.to_rgba8();
     let (width, height) = bg.dimensions();
-    let width_f32 = width as f32;
-    let height_f32 = height as f32;
+
+    let font_refs = options.fonts.iter().map(|f| &f.font).collect::<Vec<_>>();
 
     for block in &options.blocks {
         let mut rect = block.rect.clone();
@@ -266,7 +279,8 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
         let shadow_color = block
             .shadow
             .as_ref()
-            .map(|s| Pixel::try_from(&s.color))
+            .and_then(|s| s.color.as_ref())
+            .map(|s| Pixel::try_from(s))
             .transpose()?
             .unwrap_or_else(|| pixel(128, 128, 128, 255));
 
@@ -277,7 +291,35 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
             .transpose()?
             .unwrap_or_else(|| pixel(0, 0, 0, 255));
         let border_width = block.border.as_ref().map(|b| b.width).unwrap_or(0);
-        let transparent = pixel(0, 0, 0, ]);
+        let transparent = pixel(0, 0, 0, 0);
+
+        if let Some(s) = block.border.as_ref().and_then(|b| b.shadow.as_ref()) {
+            let shadow_bg_pixel = s
+                .color
+                .as_ref()
+                .map(Pixel::try_from)
+                .transpose()?
+                .unwrap_or_else(|| pixel(128, 128, 128, 128));
+            let shadow_top = rect.top + s.y;
+            let shadow_bottom = rect.bottom + s.y;
+            let shadow_left = rect.left + s.x;
+            let shadow_right = rect.right + s.x;
+
+            let shadow_bg_image = image::RgbaImage::from_fn(width, height, |x, y| {
+                if y >= shadow_top && y <= shadow_bottom && x >= shadow_left && x <= shadow_right {
+                    shadow_bg_pixel
+                } else {
+                    transparent
+                }
+            });
+
+            let shadow_bg_image = s
+                .blur
+                .map(|blur_sigma| image::imageops::blur(&shadow_bg_image, blur_sigma))
+                .unwrap_or(shadow_bg_image);
+
+            image::imageops::overlay(&mut bg, &shadow_bg_image, 0, 0);
+        }
 
         let bg_pixel = block
             .background
@@ -314,7 +356,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
             // println!("{:?}", glyph);
             let run = &block.text[glyph.section_index];
             let color = Pixel::try_from(run.color.as_ref().unwrap_or(&block.color))?;
-            let glyph_font = &options.fonts.as_slice()[glyph.font_id];
+            let glyph_font = &font_refs.as_slice()[glyph.font_id];
             if let Some(g) = glyph_font.outline_glyph(glyph.glyph) {
                 // println!("{:?}", g.px_bounds());
                 let r = g.px_bounds();
