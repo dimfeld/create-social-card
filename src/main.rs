@@ -66,8 +66,8 @@ fn main() -> Result<()> {
 
     let options = OverlayOptions {
         background: bg,
-        fonts,
-        blocks: config.blocks,
+        fonts: &fonts,
+        blocks: &config.blocks,
     };
 
     let result = overlay_text(&options)?;

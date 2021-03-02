@@ -49,8 +49,8 @@ pub struct FontDef<'a> {
 #[derive(Debug)]
 pub struct OverlayOptions<'a> {
     pub background: image::DynamicImage,
-    pub blocks: Vec<Block<'a>>,
-    pub fonts: Vec<FontDef<'a>>,
+    pub blocks: &'a [Block<'a>],
+    pub fonts: &'a [FontDef<'a>],
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
@@ -428,7 +428,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
     const DEFAULT_SHADOW_COLOR: Pixel = pixel(0, 0, 0, 25);
     const TRANSPARENT: Pixel = pixel(0, 0, 0, 0);
 
-    for block in &options.blocks {
+    for block in options.blocks {
         let mut rect = block.rect.clone();
         if rect.left > width || rect.right > width || rect.top > height || rect.bottom > height {
             return Err(anyhow!(
