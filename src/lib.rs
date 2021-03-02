@@ -10,7 +10,7 @@ use std::convert::TryFrom;
 
 type Pixel = image::Rgba<u8>;
 
-fn pixel(red: u8, green: u8, blue: u8, alpha: u8) -> Pixel {
+const fn pixel(red: u8, green: u8, blue: u8, alpha: u8) -> Pixel {
     Rgba([red, green, blue, alpha])
 }
 
@@ -291,9 +291,17 @@ fn fit_glyphs<'a>(
 
     let font_refs = fonts.iter().map(|f| &f.font).collect::<Vec<_>>();
     for sections in line_sections.as_mut_slice().iter_mut() {
+        if sections.is_empty() {
+            // This happens with a pair of newlines. We keep the empty
+            // section so that line position calculations work right, but there's
+            // nothing to do here for that case.
+            continue;
+        }
+
         let text_length = sections
             .iter()
             .fold(0, |acc, section| acc + section.text.len());
+        let last_section_byte_index = sections.last().unwrap().text.len() - 1;
         while font_size >= options.min_size {
             // println!("Trying font size {font_size}", font_size = font_size);
             for i in sections.iter_mut() {
@@ -306,9 +314,16 @@ fn fit_glyphs<'a>(
                 // When wrapping, the text fits if it doesn't exceed the vertical size available.
                 // calculate_glyphs handles fitting the text horizontally.
                 let last_glyph = glyphs.last().unwrap();
-                println!("size {}, {:?}", font_size, last_glyph);
-                let text_bottom = last_glyph.glyph.position.y + last_glyph.glyph.scale.y;
-                text_bottom < rect.bottom as f32
+                println!(
+                    "size {}, {} sections, {:?}",
+                    font_size,
+                    sections.len(),
+                    last_glyph
+                );
+                let text_bottom = last_glyph.glyph.position.y;
+                last_glyph.section_index == sections.len() - 1
+                    && last_glyph.byte_index == last_section_byte_index
+                    && text_bottom < rect.bottom as f32
             } else {
                 // In non-wrapping mode, a line fits if we can render all of its glyphs.
                 println!(
@@ -408,6 +423,8 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
     let (width, height) = bg.dimensions();
 
     let font_refs = options.fonts.iter().map(|f| &f.font).collect::<Vec<_>>();
+    const DEFAULT_SHADOW_COLOR: Pixel = pixel(0, 0, 0, 25);
+    const TRANSPARENT: Pixel = pixel(0, 0, 0, 0);
 
     for block in &options.blocks {
         let mut rect = block.rect.clone();
@@ -428,7 +445,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
             .and_then(|s| s.color.as_ref())
             .map(|s| Pixel::try_from(s))
             .transpose()?
-            .unwrap_or_else(|| pixel(128, 128, 128, 255));
+            .unwrap_or(DEFAULT_SHADOW_COLOR);
 
         let border_pixel = block
             .border
@@ -437,7 +454,6 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
             .transpose()?
             .unwrap_or_else(|| pixel(0, 0, 0, 255));
         let border_width = block.border.as_ref().map(|b| b.width).unwrap_or(0);
-        let transparent = pixel(0, 0, 0, 0);
 
         if let Some(s) = block.border.as_ref().and_then(|b| b.shadow.as_ref()) {
             let shadow_bg_pixel = s
@@ -445,7 +461,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
                 .as_ref()
                 .map(Pixel::try_from)
                 .transpose()?
-                .unwrap_or_else(|| pixel(128, 128, 128, 128));
+                .unwrap_or(DEFAULT_SHADOW_COLOR);
             let shadow_top = rect.top + s.y;
             let shadow_bottom = rect.bottom + s.y;
             let shadow_left = rect.left + s.x;
@@ -455,7 +471,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
                 if y >= shadow_top && y <= shadow_bottom && x >= shadow_left && x <= shadow_right {
                     shadow_bg_pixel
                 } else {
-                    transparent
+                    TRANSPARENT
                 }
             });
 
@@ -469,7 +485,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
             let bg_placeholder = image::RgbaImage::from_pixel(
                 rect.right - rect.left + 1,
                 rect.bottom - rect.top + 1,
-                transparent,
+                TRANSPARENT,
             );
             image::imageops::replace(&mut shadow_bg_image, &bg_placeholder, rect.left, rect.top);
 
@@ -488,7 +504,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
         let border_bottom = rect.bottom - border_width;
         let mut text_image = image::RgbaImage::from_fn(width, height, |x, y| {
             if x < rect.left || x > rect.right || y < rect.top || y > rect.bottom {
-                transparent
+                TRANSPARENT
             } else if x < border_left || x > border_right || y < border_top || y > border_bottom {
                 border_pixel
             } else {
