@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "create-social-card"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "glyph_brush_layout",
