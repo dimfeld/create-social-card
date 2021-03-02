@@ -54,6 +54,7 @@ pub struct OverlayOptions<'a> {
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum HAlign {
     Left,
     Center,
@@ -77,6 +78,7 @@ impl From<HAlign> for glyph_brush_layout::HorizontalAlign {
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum VAlign {
     Top,
     Center,
@@ -183,7 +185,7 @@ fn fit_glyphs<'a>(
         let layout = Layout::Wrap {
             line_breaker: glyph_brush_layout::BuiltInLineBreaker::UnicodeLineBreaker,
             h_align: options.h_align.into(),
-            v_align: options.v_align.into(),
+            v_align: glyph_brush_layout::VerticalAlign::Top,
         };
 
         // Just a single line here and the layout algorithm will handle the wrapping.
@@ -196,7 +198,7 @@ fn fit_glyphs<'a>(
         let layout = Layout::SingleLine {
             line_breaker,
             h_align: options.h_align.into(),
-            v_align: options.v_align.into(),
+            v_align: glyph_brush_layout::VerticalAlign::Top,
         };
 
         // In non-wrapping mode we need to manually calculate how many lines can fit in the vertical
@@ -531,6 +533,28 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
         }
 
         let lines = fit_glyphs(&options.fonts, &rect, block)?;
+        if lines.is_empty() {
+            continue;
+        }
+
+        let lines_bottom = lines
+            .last()
+            .unwrap()
+            .1
+            .last()
+            .map(|g| g.glyph.position.y)
+            .unwrap_or(rect.bottom as f32);
+        let start_y = match block.v_align {
+            VAlign::Top => 0,
+            VAlign::Center => {
+                let first_glyph = &lines[0].1[0];
+                let rect_height = rect.bottom - rect.top;
+                let lines_top = first_glyph.glyph.position.y - first_glyph.glyph.scale.y;
+                (rect_height / 2) - (((lines_bottom - lines_top - 1.0) / 2.0) as u32)
+            }
+            VAlign::Bottom => rect.bottom - (lines_bottom as u32),
+        };
+        println!("start_y: {}", start_y);
 
         for (texts, glyphs) in lines {
             for glyph in glyphs {
@@ -542,7 +566,7 @@ pub fn overlay_text(options: &OverlayOptions) -> Result<ImageBuffer<Pixel, Vec<u
                     // println!("{:?}", g.px_bounds());
                     let r = g.px_bounds();
                     let x_base = r.min.x as u32;
-                    let y_base = r.min.y as u32;
+                    let y_base = start_y + r.min.y as u32;
                     g.draw(|x, y, c| {
                         // println!("{x}, {y}, {c}", x = x, y = y, c = c);
                         let pixel = if c < 1.0 {
